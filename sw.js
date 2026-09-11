@@ -1,11 +1,11 @@
 // Bump VERSION whenever any app or content file changes.
-const VERSION = 'v2';
+const VERSION = 'v3';
 const PREFIX = 'chinese-study-' + self.registration.scope + '-';
 const CACHE = PREFIX + VERSION;
 const FILES = ['./','./index.html','./chinese-radicals.html','./style.css','./content.js','./app.js','./manifest.webmanifest','./icon.svg','./icon-192.png','./icon-512.png'];
 self.addEventListener('install', event => {
- event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(FILES)));
- // Wait for existing windows to close before switching all assets together.
+ event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(FILES)).then(() => self.skipWaiting()));
+ // Activate a complete new cache immediately; the app reloads once on controller change.
 });
 self.addEventListener('activate', event => {
  event.waitUntil((async()=>{

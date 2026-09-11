@@ -29,6 +29,8 @@ GitHub instructions: https://docs.github.com/en/pages/getting-started-with-githu
 
 ## Study and progress
 
+Study sessions use a full-screen exercise view with the next action pinned at the bottom, so continuing does not depend on scrolling. Library and Progress remain scrollable lists.
+
 The main **Smart lesson** button creates a finite block from previous performance. It combines flashcards, multiple choice, and a two-column Chinese–English matching round. A fresh profile first introduces a four-radical foundation; later lessons normally introduce one new item and mix Learning, Review, and older Familiar material. Characters unlock after three radicals become Familiar, words after five characters, and sentences after three words. Where the content has explicit relationships, higher-level cards wait until their listed prerequisites have been introduced. This is generated progression, not a fixed lesson order.
 
 Smart-lesson items move through **New → Learning → Familiar → Review**. Three consecutive correct answers make an item Familiar; a miss returns it to Learning. Correct answers schedule increasingly spaced reviews, while every lesson also draws from older Familiar material for maintenance. Matching mistakes count against the Chinese card selected on the left; finding its correct partner then records a success.
@@ -51,7 +53,7 @@ Edit the arrays in `content.js`. Radicals, combination results, family members, 
 
 IDs derive from level + Chinese text. Add new entries freely; changing a translation or pinyin preserves progress. Changing Chinese text changes its ID, so treat that as a new item or explicitly migrate the ID. Additional content automatically becomes available as unpractised.
 
-For each release, change `VERSION` in `sw.js` (for example `v1` → `v2`), and upload all modified files in the same commit. The new cache installs while online and waits for existing app windows to close, avoiding mixed app versions. Close all tabs and the Home Screen app, then reopen after the update downloads. IndexedDB progress is independent of cached app files.
+For each release, change `VERSION` in `sw.js` (for example `v1` → `v2`), and upload all modified files in the same commit. The new cache installs and activates while online, and the app reloads once when the new version takes control. If an older installed copy remains visible, fully close its window and reopen it online. IndexedDB progress is independent of cached app files.
 
 ## Local preview
 
