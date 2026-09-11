@@ -320,20 +320,45 @@ const SENTENCES = [
 // ══════════════════════════════════════
 
 const items = new Map();
-function addItem(type, zh, pinyin, en, tag = '', variant = '') {
+function addItem(type, zh, pinyin, en, tag = '', variant = '', prerequisites = []) {
   const id = type + ':' + zh;
-  if (!items.has(id)) items.set(id, {id, type, zh, pinyin, en, tag, variant});
+  if (!items.has(id)) items.set(id, {id, type, zh, pinyin, en, tag, variant, prerequisites:[]});
+  const item = items.get(id);
+  item.prerequisites = [...new Set([...item.prerequisites, ...prerequisites])];
+  return item;
 }
 RADICALS.forEach(r => addItem('radical', r.char, r.pinyin, r.meaning, r.cat, r.variant || ''));
-COMBOS.forEach(c => addItem('character', c.result.char, c.result.pinyin, c.result.meaning));
+const radicalId = char => {
+  const radical = RADICALS.find(r => r.char === char || r.variant === char);
+  return radical ? 'radical:' + radical.char : null;
+};
+COMBOS.forEach(c => addItem(
+  'character', c.result.char, c.result.pinyin, c.result.meaning, '', '',
+  c.parts.map(p => radicalId(p.char)).filter(Boolean)
+));
 FAMILIES.forEach(f => {
   addItem('character', f.sound.char, f.sound.pinyin, f.sound.meaning);
-  f.members.forEach(m => addItem('character', m.char, m.pinyin, m.meaning));
+  f.members.forEach(m => addItem(
+    'character', m.char, m.pinyin, m.meaning, '', '',
+    [radicalId(m.radical.char)].filter(Boolean)
+  ));
 });
-RADICALS.forEach(r => r.examples.forEach(e => addItem('character', e.char, e.pinyin, e.meaning)));
+RADICALS.forEach(r => r.examples.forEach(e => addItem(
+  'character', e.char, e.pinyin, e.meaning, '', '', ['radical:' + r.char]
+)));
 WORDS.forEach(g => {
   addItem('character', g.hub.char, g.hub.pinyin, g.hub.meaning);
-  g.words.forEach(w => addItem('word', w.word, w.pinyin, w.meaning));
+  g.words.forEach(w => addItem(
+    'word', w.word, w.pinyin, w.meaning, '', '',
+    [...w.word].map(char => 'character:' + char).filter(id => items.has(id))
+  ));
 });
-SENTENCES.forEach(s => addItem('sentence', s.zh, s.pinyin, s.en));
+SENTENCES.forEach(s => addItem(
+  'sentence', s.zh, s.pinyin, s.en, '', '',
+  [...new Set(s.words.flatMap(word => {
+    const wordId = 'word:' + word.c;
+    if (items.has(wordId)) return [wordId];
+    return [...word.c].map(char => 'character:' + char).filter(id => items.has(id));
+  }))]
+));
 window.CONTENT = [...items.values()];

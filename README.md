@@ -1,6 +1,6 @@
 # Chinese Study
 
-A small, dependency-free Chinese study app for iPhone Safari and desktop browsers. Flashcards, multiple-choice quizzes, and a searchable library cover radicals, characters, words, and sentences. All six directions between Chinese, pinyin, and English are supported. There are no daily quotas.
+A small, dependency-free Chinese study app for iPhone Safari and desktop browsers. Generated smart lessons, flashcards, multiple-choice quizzes, matching rounds, and a searchable library cover radicals, characters, words, and sentences. All six directions between Chinese, pinyin, and English are supported. There are no daily quotas.
 
 ## Publish with GitHub Pages (no terminal needed)
 
@@ -28,6 +28,10 @@ GitHub instructions: https://docs.github.com/en/pages/getting-started-with-githu
 `original-draft.html` is a preserved copy of the initial lesson app. It is not required for deployment. No build, account system, analytics, remote fonts, or progress backend is used.
 
 ## Study and progress
+
+The main **Smart lesson** button creates a finite block from previous performance. It combines flashcards, multiple choice, and a two-column Chinese–English matching round. A fresh profile first introduces a four-radical foundation; later lessons normally introduce one new item and mix Learning, Review, and older Familiar material. Characters unlock after three radicals become Familiar, words after five characters, and sentences after three words. Where the content has explicit relationships, higher-level cards wait until their listed prerequisites have been introduced. This is generated progression, not a fixed lesson order.
+
+Smart-lesson items move through **New → Learning → Familiar → Review**. Three consecutive correct answers make an item Familiar; a miss returns it to Learning. Correct answers schedule increasingly spaced reviews, while every lesson also draws from older Familiar material for maintenance. Matching mistakes count against the Chinese card selected on the left; finding its correct partner then records a success.
 
 Choose a level, activity, prompt/answer direction, and item pool. **Everything** repeats a shuffled deck until you stop. **Not practised** finishes after each eligible item has been attempted; **Needs practice** favours low-success items and continues until they no longer need practice or you end the session. Missed items return on the next pass through the pool.
 

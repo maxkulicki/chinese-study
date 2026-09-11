@@ -1,5 +1,5 @@
 // Bump VERSION whenever any app or content file changes.
-const VERSION = 'v1';
+const VERSION = 'v2';
 const PREFIX = 'chinese-study-' + self.registration.scope + '-';
 const CACHE = PREFIX + VERSION;
 const FILES = ['./','./index.html','./chinese-radicals.html','./style.css','./content.js','./app.js','./manifest.webmanifest','./icon.svg','./icon-192.png','./icon-512.png'];

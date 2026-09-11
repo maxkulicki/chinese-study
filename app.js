@@ -11,6 +11,10 @@ const content=window.CONTENT;
 const byId=new Map(content.map(i=>[i.id,i]));
 const key=(id,s=data.settings)=>id+'|'+s.from+'>'+s.to+'|'+s.mode;
 const record=(id,s=data.settings)=>data.records[key(id,s)];
+const SMART_SETTINGS={from:'zh',to:'en',mode:'lesson'};
+const smartRecord=id=>record(id,SMART_SETTINGS)||Object.entries(data.records)
+ .filter(([k])=>k.startsWith(id+'|')).map(([,r])=>r).sort((a,b)=>b.last-a.last)[0];
+const smartStage=id=>{const r=smartRecord(id);return !r?'New':r.streak<3?'Learning':r.next<=Date.now()?'Review':'Familiar';};
 const needs=r=>!!r && (r.streak<3 || r.next<=Date.now());
 function notify(text){$('#notice').textContent=text;$('#notice').hidden=!text;}
 function normalize(s){return String(s).normalize('NFC').trim().toLocaleLowerCase().replace(/[。？！?.!,，！；;：:]/g,'').replace(/\s+/g,' ');}
@@ -20,7 +24,7 @@ function validData(d){
  if(!d||d.version!==1||!validateSettings(d.settings)||!d.records||Array.isArray(d.records)||typeof d.records!=='object'||!d.seen||Array.isArray(d.seen)||typeof d.seen!=='object')return false;
  if(Object.keys(d.records).length>100000||Object.keys(d.seen).length>100000)return false;
  for(const [k,r] of Object.entries(d.records)){
-  if(!/\|(zh|pinyin|en)>(zh|pinyin|en)\|(flash|quiz)$/.test(k)||!r)return false;
+  if(!/\|(zh|pinyin|en)>(zh|pinyin|en)\|(flash|quiz|lesson)$/.test(k)||!r)return false;
   if(!['attempts','correct','streak','last','next'].every(f=>Number.isFinite(r[f])&&r[f]>=0))return false;
   if(!['attempts','correct','streak'].every(f=>Number.isSafeInteger(r[f]))||r.correct>r.attempts||r.streak>r.correct)return false;
  }
@@ -38,7 +42,7 @@ async function init(){
   if(saved){if(!validData(saved))throw new Error('invalid saved data');data=saved;}
   storageOK=true;
  }catch(e){db=null;notify('Local storage is unavailable or unreadable. Progress will only last this visit; export a backup before leaving.');}
- if(data.session && (!validateSettings(data.session.settings)||!Array.isArray(data.session.queue)||!data.session.queue.length||!data.session.queue.every(id=>byId.has(id))||!Number.isInteger(data.session.index)||data.session.index<0||data.session.index>=data.session.queue.length))data.session=null;
+ if(data.session&&!validSession(data.session))data.session=null;
  render();
  if('serviceWorker' in navigator && ['https:','http:'].includes(location.protocol)){
   try{await navigator.serviceWorker.register('./sw.js');await navigator.serviceWorker.ready;offlineReady=true;if(tab==='progress')render();}
@@ -48,16 +52,50 @@ async function init(){
 function typeChips(){return '<div class="chips">'+Object.entries(TYPES).map(([k,v])=>`<button data-type="${k}" class="${data.settings.type===k?'active':''}" aria-pressed="${data.settings.type===k}">${v}</button>`).join('')+'</div>';}
 function select(name,options,value){return `<select id="${name}">${Object.entries(options).map(([k,v])=>`<option value="${k}" ${k===value?'selected':''}>${v}</option>`).join('')}</select>`;}
 function pool(s=data.settings){return content.filter(i=>i.type===s.type).filter(i=>s.pool==='all'||(s.pool==='unseen'?!record(i.id,s):needs(record(i.id,s))));}
+function validSession(s){
+ if(s.kind==='guided')return Array.isArray(s.steps)&&s.steps.length>0&&s.steps.every(step=>['intro','flash','quiz','match'].includes(step.mode)&&Array.isArray(step.ids)&&step.ids.length>0&&step.ids.every(id=>byId.has(id)))&&Number.isInteger(s.index)&&s.index>=0&&s.index<s.steps.length;
+ return validateSettings(s.settings)&&Array.isArray(s.queue)&&s.queue.length>0&&s.queue.every(id=>byId.has(id))&&Number.isInteger(s.index)&&s.index>=0&&s.index<s.queue.length;
+}
+function smartCounts(){return Object.fromEntries(['New','Learning','Familiar','Review'].map(stage=>[stage,content.filter(i=>smartStage(i.id)===stage).length]));}
+function smartLessonPlan(){
+ const ranks={radical:0,character:1,word:2,sentence:3};
+ const familiar=type=>content.filter(i=>i.type===type&&smartStage(i.id)==='Familiar').length;
+ const maxRank=familiar('radical')<3?0:familiar('character')<5?1:familiar('word')<3?2:3;
+ const introduced=content.filter(i=>smartStage(i.id)!=='New');
+ const eligible=shuffle(content.filter(i=>smartStage(i.id)==='New'&&ranks[i.type]<=maxRank&&i.prerequisites.every(id=>smartStage(id)!=='New')))
+  .sort((a,b)=>ranks[b.type]-ranks[a.type]||b.prerequisites.length-a.prerequisites.length);
+ const newItems=eligible.slice(0,introduced.length<4?Math.max(1,4-introduced.length):1);
+ const learning=content.filter(i=>smartStage(i.id)==='Learning').sort((a,b)=>(smartRecord(a.id).streak-smartRecord(b.id).streak)||(smartRecord(a.id).last-smartRecord(b.id).last));
+ const review=content.filter(i=>smartStage(i.id)==='Review').sort((a,b)=>smartRecord(a.id).next-smartRecord(b.id).next);
+ const familiarItems=content.filter(i=>smartStage(i.id)==='Familiar').sort((a,b)=>smartRecord(a.id).last-smartRecord(b.id).last);
+ const selected=[];
+ for(const item of [...newItems,...learning.slice(0,3),...review.slice(0,2),...familiarItems.slice(0,2)])if(!selected.includes(item))selected.push(item);
+ for(const item of [...learning,...review,...familiarItems])if(selected.length<7&&!selected.includes(item))selected.push(item);
+ const actuallyNew=selected.filter(i=>smartStage(i.id)==='New');
+ const directions=[['zh','en'],['zh','pinyin'],['en','zh']];
+ const steps=actuallyNew.map(i=>({mode:'intro',ids:[i.id]}));
+ const matchItems=[];
+ for(const item of selected)if(!matchItems.some(other=>overlaps(other.en,item.en,'en'))){matchItems.push(item);if(matchItems.length===4)break;}
+ if(matchItems.length>=3)steps.push({mode:'match',ids:matchItems.map(i=>i.id),left:shuffle(matchItems.map(i=>i.id)),right:shuffle(matchItems.map(i=>i.id)),matched:[],selectedLeft:null,selectedRight:null,answered:false,feedback:''});
+ selected.slice(0,Math.min(3,selected.length)).forEach((item,index)=>{const [from,to]=directions[index%directions.length];steps.push({mode:'quiz',ids:[item.id],from,to,options:optionsFor(item,{type:item.type,from,to}),answered:false,picked:null});});
+ selected.slice(-Math.min(3,selected.length)).forEach((item,index)=>{const [from,to]=directions[(index+1)%directions.length];steps.push({mode:'flash',ids:[item.id],from,to,revealed:false,answered:false});});
+ return {steps,newCount:actuallyNew.length,focus:actuallyNew[0]?.type||selected[0]?.type||'radical'};
+}
 function render(){
  document.querySelectorAll('[data-tab]').forEach(b=>{if(b.dataset.tab===tab)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});
  if(tab==='study')renderStudy();else if(tab==='library')renderLibrary();else renderProgress();
 }
 function renderStudy(){
  if(data.session){renderCard();return;}
- const s=data.settings;
- $('#app').innerHTML=`<div class="eyebrow">Make room for a little Chinese</div><h1>What will you practise?</h1><p class="sub">A few cards or a long session. Stop whenever you like.</p>${typeChips()}<div class="panel"><label>Activity${select('mode',{flash:'Flashcards',quiz:'Multiple-choice quiz'},s.mode)}</label><div class="grid field"><label>Show${select('from',FIELDS,s.from)}</label><label>Recall${select('to',Object.fromEntries(Object.entries(FIELDS).filter(([k])=>k!==s.from)),s.to)}</label></div><label class="field">Choose items${select('pool',{all:'Everything',unseen:'Not practised in this direction',practice:'Needs practice'},s.pool)}</label><p class="badge">${pool().length} items · Progress is separate for each activity and direction.</p><button id="start" class="primary wide" ${!pool().length?'disabled':''}>Start practising</button></div><p class="sub">Just want to look? Open the Library to browse all three forms together.</p>`;
+ const s=data.settings,c=smartCounts(),plan=smartLessonPlan();
+ $('#app').innerHTML=`<div class="eyebrow">Make room for a little Chinese</div><h1>Choose how to study</h1><section class="panel smart-panel"><div class="row"><div><h2>Smart lesson</h2><p class="sub">A short mix chosen from your progress.</p></div><span class="level-badge">${TYPES[plan.focus]}</span></div><div class="lifecycle"><span><b>${c.New}</b> New</span><span><b>${c.Learning}</b> Learning</span><span><b>${c.Familiar}</b> Familiar</span><span><b>${c.Review}</b> Review</span></div><p class="badge">Flashcards, multiple choice, and matching · ${plan.newCount} new ${plan.newCount===1?'item':'items'} in this block</p><button id="smart-start" class="primary wide" ${!plan.steps.length?'disabled':''}>Start smart lesson</button></section><details class="panel"><summary>Free practice</summary><div class="details-body">${typeChips()}<label>Activity${select('mode',{flash:'Flashcards',quiz:'Multiple-choice quiz'},s.mode)}</label><div class="grid field"><label>Show${select('from',FIELDS,s.from)}</label><label>Recall${select('to',Object.fromEntries(Object.entries(FIELDS).filter(([k])=>k!==s.from)),s.to)}</label></div><label class="field">Choose items${select('pool',{all:'Everything',unseen:'Not practised in this direction',practice:'Needs practice'},s.pool)}</label><p class="badge">${pool().length} items · Progress is separate for each activity and direction.</p><button id="start" class="wide" ${!pool().length?'disabled':''}>Start free practice</button></div></details><p class="sub">Just want to look? Open the Library to browse all three forms together.</p>`;
  for(const name of ['mode','from','to','pool'])$('#'+name).onchange=async e=>{s[name]=e.target.value;if(s.from===s.to)s.to=Object.keys(FIELDS).find(f=>f!==s.from);await save();render();};
- $('#start').onclick=start;
+ $('#start').onclick=start;$('#smart-start').onclick=startSmart;
+}
+async function startSmart(){
+ if(busy)return;busy=true;const plan=smartLessonPlan();
+ data.session={kind:'guided',steps:plan.steps,index:0,total:0,correct:0,newCount:plan.newCount,focus:plan.focus};
+ await save();busy=false;render();navigator.storage?.persist?.().catch(()=>{});
 }
 async function start(){
  if(busy)return;busy=true;
@@ -83,7 +121,61 @@ function optionsFor(item,s){
  return shuffle(choices);
 }
 function answerHTML(i){return `<div class="answer"><div class="answer-zh" lang="zh-Hans">${esc(i.zh)}</div><p class="pinyin">${esc(i.pinyin)}</p><p class="english">${esc(i.en)}</p>${i.variant?`<p class="badge">Variant: <span lang="zh-Hans">${esc(i.variant)}</span></p>`:''}</div>`;}
+
+function smartCurrent(){return data.session.steps[data.session.index];}
+function smartRecordUpdate(id,correct){
+ const now=Date.now(),k=key(id,SMART_SETTINGS),r=data.records[k]||{attempts:0,correct:0,streak:0,last:0,next:0};
+ r.attempts++;r.correct+=Number(correct);r.streak=correct?r.streak+1:0;r.last=now;r.next=now+(correct?Math.min(90,Math.pow(2,Math.min(r.streak-1,7)))*86400000:0);data.records[k]=r;data.seen[id]=now;
+}
+function renderSmartCard(){
+ const session=data.session,step=smartCurrent(),item=byId.get(step.ids[0]);
+ const heading=`<div class="row"><span class="eyebrow">Smart lesson · ${session.index+1} / ${session.steps.length}</span><button id="end-smart" class="quiet">End session</button></div><p class="badge">${session.total} answered · ${session.correct} remembered</p>`;
+ if(step.mode==='intro'){
+  const prereqs=item.prerequisites.map(id=>byId.get(id)).filter(Boolean);
+  $('#app').innerHTML=heading+`<section class="card"><div class="eyebrow">New ${TYPES[item.type].slice(0,-1)}</div><div class="prompt chinese ${item.type==='sentence'?'sentence':''}" lang="zh-Hans">${esc(item.zh)}</div><p class="pinyin">${esc(item.pinyin)}</p><p class="english">${esc(item.en)}</p>${prereqs.length?`<p class="badge">Built on: ${prereqs.map(p=>`<span lang="zh-Hans">${esc(p.zh)}</span> ${esc(p.en)}`).join(' · ')}</p>`:''}</section><button id="smart-next" class="primary wide">Continue</button>`;
+ }else if(step.mode==='match'){
+  const remainingLeft=step.left.filter(id=>!step.matched.includes(id)),remainingRight=step.right.filter(id=>!step.matched.includes(id));
+  $('#app').innerHTML=heading+`<section class="card match-card"><div class="eyebrow">Match Chinese and English</div><p class="sub">Tap one card in each column.</p><div class="match-grid"><div>${remainingLeft.map(id=>`<button data-match-left="${esc(id)}" class="match-option ${step.selectedLeft===id?'selected':''}" lang="zh-Hans">${esc(byId.get(id).zh)}</button>`).join('')}</div><div>${remainingRight.map(id=>`<button data-match-right="${esc(id)}" class="match-option ${step.selectedRight===id?'selected':''}">${esc(byId.get(id).en)}</button>`).join('')}</div></div><p class="feedback" role="status">${esc(step.feedback||`${step.matched.length} of ${step.ids.length} matched`)}</p></section>${step.answered?'<button id="smart-next" class="primary wide">Next exercise</button>':''}`;
+ }else{
+  const quiz=step.mode==='quiz';
+  $('#app').innerHTML=heading+`<section class="card"><div class="badge">${quiz?'Choose':'Recall'} the ${FIELDS[step.to].toLowerCase()}</div><div class="prompt ${step.from==='zh'?'chinese':''} ${item.type==='sentence'?'sentence':''}" ${step.from==='zh'?'lang="zh-Hans"':''}>${esc(item[step.from])}</div>${quiz?`<div class="options">${step.options.map((v,n)=>`<button data-smart-option="${n}" ${step.to==='zh'?'lang="zh-Hans"':''} ${step.answered?'disabled':''} class="${step.answered?(v===item[step.to]?'correct':n===step.picked?'wrong':''):''}">${esc(v)}</button>`).join('')}</div>`:''}${step.answered?`<div class="feedback" role="status">${step.lastCorrect?'Got it.':'Keep practising — this returns in a future lesson.'}</div>`:''}${step.revealed||step.answered?answerHTML(item):''}</section>${!quiz?(!step.revealed?'<button id="smart-reveal" class="primary wide">Show answer</button>':!step.answered?'<div class="grid"><button id="smart-miss">Missed it</button><button id="smart-got" class="primary">Got it</button></div>':''):''}${step.answered?'<button id="smart-next" class="primary wide">Next exercise</button>':''}`;
+ }
+ $('#end-smart').onclick=endSmart;
+ if($('#smart-next'))$('#smart-next').onclick=smartNext;
+ if($('#smart-reveal'))$('#smart-reveal').onclick=async()=>{step.revealed=true;data.seen[item.id]=Date.now();await save();render();};
+ if($('#smart-got')){$('#smart-got').onclick=()=>smartGrade(true);$('#smart-miss').onclick=()=>smartGrade(false);}
+ document.querySelectorAll('[data-smart-option]').forEach(button=>button.onclick=()=>smartGrade(step.options[Number(button.dataset.smartOption)]===item[step.to],Number(button.dataset.smartOption)));
+ document.querySelectorAll('[data-match-left]').forEach(button=>button.onclick=()=>smartMatch('left',button.dataset.matchLeft));
+ document.querySelectorAll('[data-match-right]').forEach(button=>button.onclick=()=>smartMatch('right',button.dataset.matchRight));
+}
+async function smartGrade(correct,picked=null){
+ const session=data.session,step=smartCurrent();if(busy||step.answered)return;busy=true;
+ smartRecordUpdate(step.ids[0],correct);step.answered=true;step.revealed=true;step.picked=picked;step.lastCorrect=correct;session.total++;session.correct+=Number(correct);
+ await save();busy=false;render();
+}
+async function smartMatch(side,id){
+ const session=data.session,step=smartCurrent();if(busy||step.answered)return;
+ step[side==='left'?'selectedLeft':'selectedRight']=id;
+ if(!step.selectedLeft||!step.selectedRight){render();return;}
+ busy=true;const correct=step.selectedLeft===step.selectedRight;smartRecordUpdate(step.selectedLeft,correct);session.total++;session.correct+=Number(correct);
+ if(correct){step.matched.push(step.selectedLeft);step.feedback='Matched.';}else step.feedback='Not a match — try that Chinese card again.';
+ step.selectedLeft=null;step.selectedRight=null;step.answered=step.matched.length===step.ids.length;await save();busy=false;render();
+}
+async function smartNext(){
+ if(busy)return;const session=data.session,step=smartCurrent();
+ if(step.mode!=='intro'&&!step.answered)return;busy=true;
+ if(step.mode==='intro')data.seen[step.ids[0]]=Date.now();
+ session.index++;if(session.index>=session.steps.length){busy=false;await endSmart();return;}
+ await save();busy=false;render();window.scrollTo(0,0);
+}
+async function endSmart(){
+ if(busy)return;busy=true;const session=data.session;data.session=null;await save();busy=false;
+ $('#app').innerHTML=`<div class="eyebrow">Smart lesson complete</div><h1>A little stronger.</h1><div class="stats"><div><strong>${session.total}</strong><span>answered</span></div><div><strong>${session.correct}</strong><span>remembered</span></div><div><strong>${session.total-session.correct}</strong><span>missed</span></div></div><p class="sub">Familiar items will still return for maintenance. There is no daily backlog.</p><button id="again" class="primary wide">Back to Study</button>`;
+ $('#again').onclick=render;
+}
+
 function renderCard(){
+ if(data.session.kind==='guided')return renderSmartCard();
  const session=data.session,s=session.settings,i=current();
  if(!session.options && s.mode==='quiz'){session.options=optionsFor(i,s);save();}
  const quiz=s.mode==='quiz', insufficient=quiz&&session.options.length<2;
@@ -133,7 +225,7 @@ function renderProgress(){
  const known=content.filter(i=>{const r=record(i.id);return r&&!needs(r);}).length;
  const attempted=content.filter(i=>record(i.id)).length;
  const total=Object.values(data.records).reduce((n,r)=>n+r.attempts,0);
- $('#app').innerHTML=`<div class="eyebrow">Your progress</div><h1>Built one recall at a time.</h1><p class="sub">No streak to maintain. Come back whenever you like.</p><div class="panel"><h2>${FIELDS[data.settings.from]} → ${FIELDS[data.settings.to]} · ${data.settings.mode==='flash'?'Flashcards':'Quiz'}</h2><div class="stats"><div><strong>${content.length-attempted}</strong><span>not practised</span></div><div><strong>${attempted-known}</strong><span>need practice</span></div><div><strong>${known}</strong><span>familiar</span></div></div><p class="badge">Across all four levels. Familiar means at least three consecutive successes, with the next review still in the future. Results are separate for each direction and activity.</p><p>${total} answers overall · ${Object.keys(data.seen).filter(id=>byId.has(id)).length} items seen</p></div><div class="panel"><h2>Saved on this device</h2><p>${storageOK?'Local saving is working.':'Local saving is unavailable. Export before closing.'} ${offlineReady?'Offline files are ready.':'Offline files are not ready yet.'}</p><p class="badge">Use the Home Screen app consistently. Clearing website data or moving to another phone can remove your progress. Keep a backup in Files or iCloud Drive.</p><button id="export" class="wide">Export backup</button><label class="field">Restore backup (replaces current progress)<input id="restore" type="file" accept="application/json,.json"></label><p id="backup-status" role="status" class="badge"></p></div><div class="panel"><h2>Install on iPhone</h2><p>Open the published site in Safari, tap Share, then Add to Home Screen. Open that icon online once, and check that “Offline files are ready” appears here before going offline.</p><p class="badge">App updates become available online. Close all app windows and reopen to use an installed update. Progress stays on this device.</p></div>`;
+ $('#app').innerHTML=`<div class="eyebrow">Your progress</div><h1>Built one recall at a time.</h1><p class="sub">No streak to maintain. Come back whenever you like.</p><div class="panel"><h2>${FIELDS[data.settings.from]} → ${FIELDS[data.settings.to]} · ${data.settings.mode==='flash'?'Flashcards':'Quiz'}</h2><div class="stats"><div><strong>${content.length-attempted}</strong><span>not practised</span></div><div><strong>${attempted-known}</strong><span>need practice</span></div><div><strong>${known}</strong><span>familiar</span></div></div><p class="badge">Across all four levels. Familiar means at least three consecutive successes, with the next review still in the future. Results are separate for each direction and activity.</p><p>${total} answers overall · ${Object.keys(data.seen).filter(id=>byId.has(id)).length} items seen</p></div><div class="panel"><h2>Smart lesson lifecycle</h2><div class="lifecycle">${Object.entries(smartCounts()).map(([stage,count])=>`<span><b>${count}</b> ${stage}</span>`).join('')}</div><p class="badge">Smart lessons share progress across their three exercise forms. Familiar material is periodically mixed back in; Review means its scheduled interval has elapsed.</p></div><div class="panel"><h2>Saved on this device</h2><p>${storageOK?'Local saving is working.':'Local saving is unavailable. Export before closing.'} ${offlineReady?'Offline files are ready.':'Offline files are not ready yet.'}</p><p class="badge">Use the Home Screen app consistently. Clearing website data or moving to another phone can remove your progress. Keep a backup in Files or iCloud Drive.</p><button id="export" class="wide">Export backup</button><label class="field">Restore backup (replaces current progress)<input id="restore" type="file" accept="application/json,.json"></label><p id="backup-status" role="status" class="badge"></p></div><div class="panel"><h2>Install on iPhone</h2><p>Open the published site in Safari, tap Share, then Add to Home Screen. Open that icon online once, and check that “Offline files are ready” appears here before going offline.</p><p class="badge">App updates become available online. Close all app windows and reopen to use an installed update. Progress stays on this device.</p></div>`;
  $('#export').onclick=()=>{const blob=new Blob([JSON.stringify({...data,session:null,exportedAt:new Date().toISOString()},null,2)],{type:'application/json'});const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='chinese-study-'+new Date().toISOString().slice(0,10)+'.json';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);$('#backup-status').textContent='Backup download requested. Save the file to Files or iCloud Drive.';};
  $('#restore').onchange=restore;
 }
